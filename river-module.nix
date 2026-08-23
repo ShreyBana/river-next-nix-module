@@ -47,16 +47,28 @@ let
     channel = pkgs.callPackage ./channel/package.nix { };
     kwim = pkgs.callPackage ./kwim/package.nix { };
   };
-  selectedWMs = map (
-    name:
-      if name == "jrwm" && (
-        cfg.jrwmConfig.bindings != null
-        || cfg.jrwmConfig.layout != null
-        || cfg.jrwmConfig.configFile != null
-      )
-      then cfg.jrwmConfig.package
-      else localPkgs.${name}
-  ) cfg.windowManagers;
+  localWM = lib.optional (cfg.localWindowManager != null) (
+    pkgs.callPackage cfg.localWindowManager {
+      riverNextRoot = ./.;
+    }
+  );
+  localWMNames = map (pkg: pkg.pname) localWM;
+  selectedWMs =
+    localWM
+    ++ map (
+      name:
+      if
+        name == "jrwm"
+        && (
+          cfg.jrwmConfig.bindings != null
+          || cfg.jrwmConfig.layout != null
+          || cfg.jrwmConfig.configFile != null
+        )
+      then
+        cfg.jrwmConfig.package
+      else
+        localPkgs.${name}
+    ) cfg.windowManagers;
 in
 {
   options.programs.river-next = {
@@ -111,6 +123,18 @@ in
       type = types.bool;
       default = false;
       description = "Enable kwim input manager.";
+    };
+
+    localWindowManager = mkOption {
+      type = types.nullOr types.path;
+      default = null;
+      example = lib.literalExpression "./my-wm/package.nix";
+      description = ''
+        Path to a package.nix for a custom window manager, callPackage'd and
+        used alongside (or instead of) the built-in windowManagers list.
+        The derivation's `pname` is used as both the session name and the
+        binary name looked up on $PATH.
+      '';
     };
 
     windowManagers = mkOption {
@@ -235,8 +259,6 @@ in
     };
   };
 
-
-
   config = mkIf cfg.enable (mkMerge [
     {
       environment.systemPackages =
@@ -310,74 +332,75 @@ in
       };
       services.displayManager.sessionPackages =
         lib.optional (cfg.package != null) cfg.package
-        ++ (map (
-          windowManager:
-          let
-            initScript = pkgs.writeShellScript "river-${windowManager}-init" ''
-              export XDG_CURRENT_DESKTOP=river
+        ++ (
+          map (
+            windowManager:
+            let
+              initScript = pkgs.writeShellScript "river-${windowManager}-init" ''
+                export XDG_CURRENT_DESKTOP=river
 
-              ${pkgs.systemd}/bin/systemctl --user import-environment \
-                WAYLAND_DISPLAY \
-                XDG_CURRENT_DESKTOP \
-                XDG_RUNTIME_DIR \
-                DISPLAY
-              ${pkgs.dbus}/bin/dbus-update-activation-environment --systemd \
-                WAYLAND_DISPLAY \
-                XDG_CURRENT_DESKTOP \
-                XDG_RUNTIME_DIR \
-                DISPLAY
+                ${pkgs.systemd}/bin/systemctl --user import-environment \
+                  WAYLAND_DISPLAY \
+                  XDG_CURRENT_DESKTOP \
+                  XDG_RUNTIME_DIR \
+                  DISPLAY
+                ${pkgs.dbus}/bin/dbus-update-activation-environment --systemd \
+                  WAYLAND_DISPLAY \
+                  XDG_CURRENT_DESKTOP \
+                  XDG_RUNTIME_DIR \
+                  DISPLAY
 
-              ${pkgs.systemd}/bin/systemctl --user start river-session.target
+                ${pkgs.systemd}/bin/systemctl --user start river-session.target
 
-              ${lib.optionalString cfg.kanshi.enable ''
+                ${lib.optionalString cfg.kanshi.enable ''
+                  ${
+                    let
+                      configFlag = lib.optionalString (
+                        cfg.kanshi.config != null
+                      ) " -c ${pkgs.writeText "kanshi-config" cfg.kanshi.config}";
+                    in
+                    "${pkgs.kanshi}/bin/kanshi${configFlag}"
+                  } &
+                ''}
+
+                ${lib.optionalString (windowManager == "rhine" || cfg.channel.enable) ''
+                  ${localPkgs.channel}/bin/channel &
+                ''}
+
+                ${lib.optionalString (windowManager == "kwm" || cfg.kwim.enable) ''
+                  ${localPkgs.kwim}/bin/kwim &
+                ''}
+
                 ${
-                  let
-                    configFlag = lib.optionalString (
-                      cfg.kanshi.config != null
-                    ) " -c ${pkgs.writeText "kanshi-config" cfg.kanshi.config}";
-                  in
-                  "${pkgs.kanshi}/bin/kanshi${configFlag}"
-                } &
-              ''}
-
-              ${lib.optionalString (windowManager == "rhine" || cfg.channel.enable) ''
-                ${localPkgs.channel}/bin/channel &
-              ''}
-
-              ${lib.optionalString (windowManager == "kwm" || cfg.kwim.enable) ''
-                ${localPkgs.kwim}/bin/kwim &
-              ''}
-
-              ${
-                if windowManager == "triad" then
-                  ''
-                    exec "$TRIAD_MANAGER_LOOP"
-                  ''
-                else if windowManager == "weir" then
-                let
-                  weirInit = pkgs.writeShellScript "river-weir-init" ''
-                    export PATH=${lib.makeBinPath [ localPkgs.weir ]}:$PATH
-                    ${cfg.weirConfig}
-                  '';
-                  in
+                  if windowManager == "triad" then
+                    ''
+                      exec "$TRIAD_MANAGER_LOOP"
+                    ''
+                  else if windowManager == "weir" then
+                    let
+                      weirInit = pkgs.writeShellScript "river-weir-init" ''
+                        export PATH=${lib.makeBinPath [ localPkgs.weir ]}:$PATH
+                        ${cfg.weirConfig}
+                      '';
+                    in
                     ''
                       exec ${weirInit}
                     ''
-                else
-                  ''
-                    exec /run/current-system/sw/bin/${windowManager}
-                  ''
-              }
-            '';
-            launcher = pkgs.writeShellScript "river-${windowManager}-launcher" ''
-              ${
-                if windowManager == "reka" then
-                  ''
-                    exec dbus-run-session -- /run/current-system/sw/bin/river -c \
-                      "${pkgs.emacs}/bin/emacs \
-                        --directory ${localPkgs.reka.reka-lib}/share/emacs/site-lisp \
-                        --directory ${localPkgs.reka}/share/emacs/site-lisp"
-                  ''
+                  else
+                    ''
+                      exec /run/current-system/sw/bin/${windowManager}
+                    ''
+                }
+              '';
+              launcher = pkgs.writeShellScript "river-${windowManager}-launcher" ''
+                ${
+                  if windowManager == "reka" then
+                    ''
+                      exec dbus-run-session -- /run/current-system/sw/bin/river -c \
+                        "${pkgs.emacs}/bin/emacs \
+                          --directory ${localPkgs.reka.reka-lib}/share/emacs/site-lisp \
+                          --directory ${localPkgs.reka}/share/emacs/site-lisp"
+                    ''
 
                   # Adapted from: https://github.com/greenm01/triad/blob/master/flake.nix
                   # for usage in this session entry generator.
@@ -409,26 +432,27 @@ in
                       exec ${pkgs.dbus}/bin/dbus-run-session -- "$TRIAD_RIVER_BIN" -c ${initScript}
                     ''
 
-                else
-                  ''
-                    exec dbus-run-session -- /run/current-system/sw/bin/river -c ${initScript}
-                  ''
-              }
-            '';
-          in
-          pkgs.writeTextFile {
-            name = "river-${windowManager}-session";
-            destination = "/share/wayland-sessions/river-${windowManager}.desktop";
-            text = ''
-              [Desktop Entry]
-              Name=River (${windowManager})
-              Type=Application
-              Comment=Launch River with ${windowManager} as window manager.
-              Exec=${launcher}
-            '';
-            passthru.providedSessions = [ "river-${windowManager}" ];
-          }
-        ) cfg.windowManagers);
+                  else
+                    ''
+                      exec dbus-run-session -- /run/current-system/sw/bin/river -c ${initScript}
+                    ''
+                }
+              '';
+            in
+            pkgs.writeTextFile {
+              name = "river-${windowManager}-session";
+              destination = "/share/wayland-sessions/river-${windowManager}.desktop";
+              text = ''
+                [Desktop Entry]
+                Name=River (${windowManager})
+                Type=Application
+                Comment=Launch River with ${windowManager} as window manager.
+                Exec=${launcher}
+              '';
+              passthru.providedSessions = [ "river-${windowManager}" ];
+            }
+          ) (cfg.windowManagers ++ localWMNames)
+        );
     }
   ]);
 }
