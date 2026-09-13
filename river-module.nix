@@ -78,6 +78,12 @@ in
       description = "Enable new River window manager.";
     };
 
+    debug = mkOption {
+      type = types.bool;
+      default = false;
+      description = "Enable new debug logging.";
+    };
+
     package =
       mkOption {
         type = types.nullOr types.package;
@@ -332,127 +338,126 @@ in
       };
       services.displayManager.sessionPackages =
         lib.optional (cfg.package != null) cfg.package
-        ++ (
-          map (
-            windowManager:
-            let
-              initScript = pkgs.writeShellScript "river-${windowManager}-init" ''
-                export XDG_CURRENT_DESKTOP=river
+        ++ (map (
+          windowManager:
+          let
+            initScript = pkgs.writeShellScript "river-${windowManager}-init" ''
+              export XDG_CURRENT_DESKTOP=river
 
-                ${pkgs.systemd}/bin/systemctl --user import-environment \
-                  WAYLAND_DISPLAY \
-                  XDG_CURRENT_DESKTOP \
-                  XDG_RUNTIME_DIR \
-                  DISPLAY
-                ${pkgs.dbus}/bin/dbus-update-activation-environment --systemd \
-                  WAYLAND_DISPLAY \
-                  XDG_CURRENT_DESKTOP \
-                  XDG_RUNTIME_DIR \
-                  DISPLAY
+              ${pkgs.systemd}/bin/systemctl --user import-environment \
+                WAYLAND_DISPLAY \
+                XDG_CURRENT_DESKTOP \
+                XDG_RUNTIME_DIR \
+                DISPLAY
+              ${pkgs.dbus}/bin/dbus-update-activation-environment --systemd \
+                WAYLAND_DISPLAY \
+                XDG_CURRENT_DESKTOP \
+                XDG_RUNTIME_DIR \
+                DISPLAY
 
-                ${pkgs.systemd}/bin/systemctl --user start river-session.target
+              ${pkgs.systemd}/bin/systemctl --user start river-session.target
 
-                ${lib.optionalString cfg.kanshi.enable ''
-                  ${
-                    let
-                      configFlag = lib.optionalString (
-                        cfg.kanshi.config != null
-                      ) " -c ${pkgs.writeText "kanshi-config" cfg.kanshi.config}";
-                    in
-                    "${pkgs.kanshi}/bin/kanshi${configFlag}"
-                  } &
-                ''}
-
-                ${lib.optionalString (windowManager == "rhine" || cfg.channel.enable) ''
-                  ${localPkgs.channel}/bin/channel &
-                ''}
-
-                ${lib.optionalString (windowManager == "kwm" || cfg.kwim.enable) ''
-                  ${localPkgs.kwim}/bin/kwim &
-                ''}
-
+              ${lib.optionalString cfg.kanshi.enable ''
                 ${
-                  if windowManager == "triad" then
-                    ''
-                      exec "$TRIAD_MANAGER_LOOP"
-                    ''
-                  else if windowManager == "weir" then
-                    let
-                      weirInit = pkgs.writeShellScript "river-weir-init" ''
-                        export PATH=${lib.makeBinPath [ localPkgs.weir ]}:$PATH
-                        ${cfg.weirConfig}
-                      '';
-                    in
-                    ''
-                      exec ${weirInit}
-                    ''
-                  else
-                    ''
-                      exec /run/current-system/sw/bin/${windowManager}
-                    ''
-                }
-              '';
-              launcher = pkgs.writeShellScript "river-${windowManager}-launcher" ''
-                ${
-                  if windowManager == "reka" then
-                    ''
-                      exec dbus-run-session -- /run/current-system/sw/bin/river -c \
-                        "${pkgs.emacs}/bin/emacs \
-                          --directory ${localPkgs.reka.reka-lib}/share/emacs/site-lisp \
-                          --directory ${localPkgs.reka}/share/emacs/site-lisp"
-                    ''
+                  let
+                    configFlag = lib.optionalString (
+                      cfg.kanshi.config != null
+                    ) " -c ${pkgs.writeText "kanshi-config" cfg.kanshi.config}";
+                  in
+                  "${pkgs.kanshi}/bin/kanshi${configFlag}"
+                } &
+              ''}
 
-                  # Adapted from: https://github.com/greenm01/triad/blob/master/flake.nix
-                  # for usage in this session entry generator.
-                  else if windowManager == "triad" then
-                    ''
-                      state_dir="''${XDG_STATE_HOME:-$HOME/.local/state}/triad"
-                      mkdir -p "$state_dir"
+              ${lib.optionalString (windowManager == "rhine" || cfg.channel.enable) ''
+                ${localPkgs.channel}/bin/channel &
+              ''}
 
-                      stamp="$(${pkgs.coreutils}/bin/date +%Y%m%d-%H%M%S)"
-                      session_id="$stamp-$$"
-                      session_log="$state_dir/triad-session-$session_id.log"
-                      latest_session_log="$state_dir/triad-session-latest.log"
+              ${lib.optionalString (windowManager == "kwm" || cfg.kwim.enable) ''
+                ${localPkgs.kwim}/bin/kwim &
+              ''}
 
-                      ln -sfn "$session_log" "$latest_session_log" 2>/dev/null || true
-                      exec >> "$session_log" 2>&1
+              ${
+                if windowManager == "triad" then
+                  ''
+                    exec "$TRIAD_MANAGER_LOOP"
+                  ''
+                else if windowManager == "weir" then
+                  let
+                    weirInit = pkgs.writeShellScript "river-weir-init" ''
+                      export PATH=${lib.makeBinPath [ localPkgs.weir ]}:$PATH
+                      ${cfg.weirConfig}
+                    '';
+                  in
+                  ''
+                    exec ${weirInit}
+                  ''
+                else
+                  ''
+                    exec /run/current-system/sw/bin/${windowManager}
+                  ''
+              }
+            '';
+            logFlag = if cfg.debug then "-log-level debug" else "";
+            launcher = pkgs.writeShellScript "river-${windowManager}-launcher" ''
+              ${
+                if windowManager == "reka" then
+                  ''
+                    exec dbus-run-session -- /run/current-system/sw/bin/river -c \
+                      "${pkgs.emacs}/bin/emacs \
+                        --directory ${localPkgs.reka.reka-lib}/share/emacs/site-lisp \
+                        --directory ${localPkgs.reka}/share/emacs/site-lisp"
+                  ''
 
-                      export XDG_CURRENT_DESKTOP=river
-                      export XDG_SESSION_DESKTOP=river-triad
-                      export XDG_SESSION_TYPE=wayland
-                      export TRIAD_SESSION_ID="$session_id"
-                      export TRIAD_SESSION_LOG="$session_log"
-                      export TRIAD_SESSION_PID="$$"
+                # Adapted from: https://github.com/greenm01/triad/blob/master/flake.nix
+                # for usage in this session entry generator.
+                else if windowManager == "triad" then
+                  ''
+                    state_dir="''${XDG_STATE_HOME:-$HOME/.local/state}/triad"
+                    mkdir -p "$state_dir"
 
-                      export TRIAD_BIN="${localPkgs.triad}/bin/triad"
-                      export TRIAD_MANAGER_LOOP="${localPkgs.triad}/share/triad/live-src/triad-manager-loop"
-                      export TRIAD_DOCTOR_EXPECT_DAEMON_EXE="${localPkgs.triad}/bin/triad"
-                      export TRIAD_RIVER_BIN="${localPkgs.river-next}/bin/river"
+                    stamp="$(${pkgs.coreutils}/bin/date +%Y%m%d-%H%M%S)"
+                    session_id="$stamp-$$"
+                    session_log="$state_dir/triad-session-$session_id.log"
+                    latest_session_log="$state_dir/triad-session-latest.log"
 
-                      exec ${pkgs.dbus}/bin/dbus-run-session -- "$TRIAD_RIVER_BIN" -c ${initScript}
-                    ''
+                    ln -sfn "$session_log" "$latest_session_log" 2>/dev/null || true
+                    exec >> "$session_log" 2>&1
 
-                  else
-                    ''
-                      exec dbus-run-session -- /run/current-system/sw/bin/river -c ${initScript}
-                    ''
-                }
-              '';
-            in
-            pkgs.writeTextFile {
-              name = "river-${windowManager}-session";
-              destination = "/share/wayland-sessions/river-${windowManager}.desktop";
-              text = ''
-                [Desktop Entry]
-                Name=River (${windowManager})
-                Type=Application
-                Comment=Launch River with ${windowManager} as window manager.
-                Exec=${launcher}
-              '';
-              passthru.providedSessions = [ "river-${windowManager}" ];
-            }
-          ) (cfg.windowManagers ++ localWMNames)
-        );
+                    export XDG_CURRENT_DESKTOP=river
+                    export XDG_SESSION_DESKTOP=river-triad
+                    export XDG_SESSION_TYPE=wayland
+                    export TRIAD_SESSION_ID="$session_id"
+                    export TRIAD_SESSION_LOG="$session_log"
+                    export TRIAD_SESSION_PID="$$"
+
+                    export TRIAD_BIN="${localPkgs.triad}/bin/triad"
+                    export TRIAD_MANAGER_LOOP="${localPkgs.triad}/share/triad/live-src/triad-manager-loop"
+                    export TRIAD_DOCTOR_EXPECT_DAEMON_EXE="${localPkgs.triad}/bin/triad"
+                    export TRIAD_RIVER_BIN="${localPkgs.river-next}/bin/river"
+
+                    exec ${pkgs.dbus}/bin/dbus-run-session -- "$TRIAD_RIVER_BIN" -c ${initScript}
+                  ''
+
+                else
+                  ''
+                    exec dbus-run-session -- /run/current-system/sw/bin/river ${logFlag} -c ${initScript} 2>&1 >> /tmp/river.log
+                  ''
+              }
+            '';
+          in
+          pkgs.writeTextFile {
+            name = "river-${windowManager}-session";
+            destination = "/share/wayland-sessions/river-${windowManager}.desktop";
+            text = ''
+              [Desktop Entry]
+              Name=River (${windowManager})
+              Type=Application
+              Comment=Launch River with ${windowManager} as window manager.
+              Exec=${launcher}
+            '';
+            passthru.providedSessions = [ "river-${windowManager}" ];
+          }
+        ) (cfg.windowManagers ++ localWMNames));
     }
   ]);
 }
