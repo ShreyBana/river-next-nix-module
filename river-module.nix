@@ -440,7 +440,8 @@ in
 
                 else
                   ''
-                    exec dbus-run-session -- /run/current-system/sw/bin/river ${logFlag} -c ${initScript} 2>&1 >> /tmp/river.log
+                    exec dbus-run-session -- /run/current-system/sw/bin/river ${logFlag} -c ${initScript} \
+                      > "/tmp/river-$(date +%s).log" 2>&1 
                   ''
               }
             '';
